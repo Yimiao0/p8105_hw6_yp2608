@@ -1,0 +1,169 @@
+---
+title: "Homework 5"
+author: "Yimiao Pang"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(modelr)
+```
+
+## Problem 1
+
+```{r p1clean}
+# load and clean - convert numeric to factor
+bw_df = read_csv("./data/birthweight.csv") %>% 
+  mutate(
+    babysex = as.factor(babysex),
+    frace = as.factor(frace),
+    malform = as.factor(malform),
+    mrace = as.factor(mrace)
+  )
+
+# check for missing data
+which(is.na(bw_df))
+```
+
+
+```{r p1plot_gaweeks_ppwt}
+bw_df %>% 
+  ggplot(aes(x = gaweeks, y = bwt)) +
+  geom_point()
+
+bw_df %>% 
+  ggplot(aes(x = ppwt, y = bwt)) +
+  geom_point()
+```
+
+It is hypothesized that the birth weight might increase as the gestational age/mother's pre-pregnancy weight increases. After observing the relationships between bwt and gaweeks/ppwt through scatter plots, there do exist positive correlations. Thus, we can try to set gaweeks and ppwt as the predictors.
+
+
+```{r p1_lm}
+fit = lm(bwt ~ gaweeks + ppwt, data = bw_df)
+summary(fit)
+```
+
+```{r p1_diagnostics}
+bw_df %>% 
+  add_residuals(fit) %>% 
+  ggplot(aes(x = gaweeks, y = resid)) +
+  geom_point() + 
+  geom_point(aes(x = ppwt, color = "red"))
+bw_df %>% 
+  add_residuals(fit) %>% 
+  ggplot(aes(x = resid)) +
+  geom_density()
+```
+
+```{r p1_stdmodel1}
+fit_2 = lm(bwt ~ blength + gaweeks, data = bw_df)
+summary(fit_2)
+```
+
+```{r p1_stdmodel2}
+fit_3 = lm(bwt ~ babysex + bhead + blength + babysex * bhead + babysex * blength + bhead * blength + babysex * bhead * blength, data = bw_df)
+summary(fit_3)
+```
+
+```{r p1_cross}
+cv_df = 
+  crossv_mc(bw_df, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+
+cv_df_rmse = 
+  cv_df %>% 
+  mutate(
+    mod1 = map(.x = train, ~lm(bwt ~ gaweeks + ppwt, data = .x)),
+    mod2 = map(.x = train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    mod3 = map(.x = train, ~lm(bwt ~ babysex + bhead + blength + babysex * bhead + babysex * blength + bhead * blength + babysex * bhead * blength, data = .x))
+  ) %>% 
+  mutate(
+    rmse1 = map2_dbl(.x = mod1, .y = test, ~rmse(model = .x, data = .y)),
+    rmse2 = map2_dbl(.x = mod2, .y = test, ~rmse(model = .x, data = .y)),
+    rmse3 = map2_dbl(.x = mod3, .y = test, ~rmse(model = .x, data = .y))
+  )
+
+cv_df_rmse %>% 
+  select(.id, starts_with("rmse")) %>% 
+  pivot_longer(
+    rmse1:rmse3,
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) %>% 
+  ggplot(aes(x = model, y = rmse)) + 
+  geom_boxplot()
+```
+
+
+
+## Problem 2
+
+```{r p2_load}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+```{r}
+bootstrap_results = 
+  weather_df %>% 
+  bootstrap(n = 5000, id = "bp_number") %>% 
+  mutate(
+    models = map(.x = strap, ~lm(tmax ~ tmin, data = .x)),
+    results = map(models, broom::glance)
+    ) %>% 
+  select(bp_number, results) %>% 
+  unnest(results)
+
+bootstrap_results %>% 
+  janitor::clean_names() %>% 
+  summarize(
+    ci_low = quantile(r_squared, 0.025),
+    ci_up = quantile(r_squared, 0.975)
+  )
+```
+
+```{r}
+# beta0, beta1
+bootstrap_results_2 = 
+  weather_df %>% 
+  bootstrap(n = 5000, id = "bp_number") %>% 
+  mutate(
+    models = map(.x = strap, ~lm(tmax ~ tmin, data = .x)),
+    results = map(models, broom::tidy)
+    ) %>% 
+  select(bp_number, results) %>% 
+  unnest(results)
+
+bootstrap_results_2 %>% 
+  janitor::clean_names() %>% 
+  select(term, estimate) %>% 
+  pivot_wider(
+    names_from = term,
+    values_from = estimate
+  ) %>% 
+  janitor::clean_names() %>% 
+  unnest(tmin) %>% 
+  unnest(intercept) %>% 
+  mutate(
+    log_ = log(intercept * tmin)
+  ) %>% 
+  summarize(
+    ci_low = quantile(log_, 0.025),
+    ci_up = quantile(log_, 0.975)
+  )
+```
+
